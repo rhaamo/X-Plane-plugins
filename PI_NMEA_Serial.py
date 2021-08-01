@@ -20,11 +20,15 @@ Requirements are:
 from XPLMProcessing import *  # noqa F403
 from XPLMDataAccess import *  # noqa F403
 from XPLMUtilities import *  # noqa F403
+from XPLMNavigation import *
 
 # import math
 from datetime import date
 import os
 import serial
+import threading
+import pynmea2
+from math import floor, ceil
 
 OutputFile = open(
     os.path.join(
@@ -44,13 +48,15 @@ Maybe a $GPRMB Recommended minimum navigation info for current WP
 
 Sending waypoints:
 GPR00 send the list
-then one GPWPL per waypoint
+then one GPWPL per waypoint, in same order as R00
 """
 
 """
 http://www.cedricaoun.net/eie/trames%20NMEA183.pdf
 http://aprs.gids.nl/nmea/
 https://docs.novatel.com/OEM7/Content/Logs/GPGSA.htm
+
+max sentence length, including $ and CRLF is 82 bytes
 """
 
 """
@@ -65,7 +71,10 @@ By default the BAUD RATE is 4800
 Choose 19200 8 NONE 1
 Then AUX to exit
 
-Supported NMEA-0183 sentences (*** denotes already supported sentences by the plugin):
+Supported NMEA-0183 sentences.
+- *** denotes already supported sentences by the plugin
+- !!! denotes WIP/Broken sentences by the plugin
+- --- denotes to be implemented next
     APA: AUTO-PILOT 'A' (VALID, CROSS-TRACK DEVIATION, BEARING)
     GLL: LATITUDE, LONGITUDE
     VTG: TRACK, GROUND SPEED
@@ -73,11 +82,11 @@ Supported NMEA-0183 sentences (*** denotes already supported sentences by the pl
     BWC: BEARING, DISTANCE (GT. CIRCLE)
     HVD: MAGVAR (DERIVED)
     APB: AUTO-PILOT 'B' (VALID,CROSS-TRACK DEVIATION,BEARING,WAYPOINT ID,DISTANCE)
-    RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
+    ---RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
     ***RMC: GPS AND TRANSIT INFO (UTC TIME,VALID,LAT,LON,GROUND SPEED,TRACK,MAGVAR)
-    R00: ROUTE DEFINITION
-    RTE: ROUTE DEFINITION
-    WPL: WAYPOINT LOCATION
+    ***R00: ROUTE DEFINITION --- the argus don't seems to understand/use it correctly
+    ***RTE: ROUTE DEFINITION --- the argus don't seems to understand/use it correctly
+    ***WPL: WAYPOINT LOCATION --- the argus don't seems to understand/use it correctly
     MAP: KING MARINE - AUTO-PILOT 'B'
     MLC: KING MARINE - LAT/LON
     ***GGA: GPS FIX RECORD
@@ -96,6 +105,43 @@ def cksum(sentence):
     return cksum
 
 
+### From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
+
+def degrees_to_ddm(dd):
+    degrees = int(floor(dd))
+    minutes = (dd - degrees) * 60
+    return (degrees, minutes)
+
+
+def latitude_to_ddm(dd):
+    direction = "S" if dd < 0 else "N"
+    degrees, minutes = degrees_to_ddm(abs(dd))
+
+    return "{0:02d}{1:05.2f}".format(
+        degrees,
+        minutes,
+        ), direction
+
+def longitude_to_ddm(dd):
+    direction = "W" if dd < 0 else "E"
+    degrees, minutes = degrees_to_ddm(abs(dd))
+
+    return "{0:03d}{1:05.2f}".format(
+        degrees,
+        minutes,
+        ), direction
+
+"""
+Examples
+NMEA: 1929.045
+Lat: -19.484083333333334 S
+NMEA: 02410.506
+Lon: 24.1751 E
+"""
+
+### End from aprslib
+
+
 class SocketPlugin(object):
     SERPORT = "COM12"
     s = None
@@ -107,7 +153,12 @@ class SocketPlugin(object):
         self.s = serial.Serial(self.SERPORT, 19200)
 
     def write(self, data):
-        self.s.write(data.encode())
+        try:
+            self.s.write(data.encode())
+        except serial.serialutil.SerialTimeoutException:
+            print("Serial port timeout")
+        except serial.serialutil.SerialException as e:
+            print(f"Serial port error: {e}")
 
 
 class PythonInterface:
@@ -164,13 +215,20 @@ class PythonInterface:
         # are in seconds, negative are the negative of sim frames.  Zero
         # registers but does not schedule a callback for time.
         self.FlightLoopCB = self.FlightLoopCallback
-        XPLMRegisterFlightLoopCallback(self, self.FlightLoopCB, 0.5, 0)
+        XPLMRegisterFlightLoopCallback(self, self.FlightLoopCB, 0.4, 0)
+
+        # FlightPlan update every 5s
+        self.FlightPlanCB = self.FlightPlanCallback
+        XPLMRegisterFlightLoopCallback(self, self.FlightPlanCB, 5, 0)
+
         return self.Name, self.Sig, self.Desc
 
     def XPluginStop(self):
         # Unregister the callback.
         XPLMUnregisterFlightLoopCallback(self, self.FlightLoopCB, 0)
+        XPLMUnregisterFlightLoopCallback(self, self.FlightPlanCB, 0)
         self.OutputFile.close()
+        self.ser.close()
 
     def XPluginEnable(self):
         return 1
@@ -284,12 +342,71 @@ class PythonInterface:
         gpgga = f"${gpgga}*{cks}\r\n"
 
         # serial write at 4800 baud can take .3 sec, so put in own thread;
-        # write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
-        # write_thread.start()
+        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
+        write_thread.start()
         self.ser.write(gprmc + gpgga)
         if self.DEBUG:
             OutputFile.write(gprmc + gpgga)
             OutputFile.flush()
+        
+        # TODO: RMB sentence
 
-        # Return s.s to indicate that we want to be called again in s.s seconds.
-        return 0.1
+        return 0.4 # in 0.4s
+
+    def FlightPlanCallback(self, elapsedMe, elapsedSim, counter, refcon):
+        entriesInFMC = XPLMCountFMSEntries()
+
+        if entriesInFMC > 0:
+            entries = []
+            wpts_list = []
+            for i in range(entriesInFMC):
+                wpt = XPLMGetFMSEntryInfo(i)
+                entries.append(wpt)
+                if wpt.navAidID.startswith("("):
+                    wpts_list.append(wpt.navAidID[1:-1])
+                else:
+                    wpts_list.append(wpt.navAidID)
+
+            # GPRTE
+            # doesn't seems that great to use with the ARGUS
+            # the order seems to be reversed, and the current route not taken into account
+            # but this sentence is parsed
+            # rte_list = []
+            # rte_idx = ceil(entriesInFMC / 5)
+            # split_by = 5
+            # for wpts in [wpts_list[i:i + split_by] for i in range(0, len(wpts_list), split_by)] :
+            #     gprte = pynmea2.RTE("GP", "RTE", (str(ceil(entriesInFMC / 5)), str(rte_idx), "c", *wpts)).render()
+            #     rte_list.append(gprte + '\r\n')
+            #     rte_idx -= 1
+            # # For some reasons, the Argus parses them in reverse order received
+            # rte_list.reverse()
+            # print(rte_list)
+
+            # R00 and WPL
+            # They are weirdly understood by the Argus
+            # some coordinates are mangled in the waypoints list
+            # and the waypoint edit shows glitchy coordinates, but that may be because the argus don't known thoses waypoints ID in its DB
+            # GPR00
+            gpr00 = pynmea2.R00("GP", "R00", wpts_list).render() + '\r\n'
+            print(gpr00)
+
+            # Followed by all the GPWPL
+            gpwpl_list = []
+            for wpt in entries:
+                if wpt.navAidID.startswith("("):
+                    wpt_name = wpt.navAidID[1:-1]
+                else:
+                    wpt_name = wpt.navAidID
+                lat =latitude_to_ddm(wpt.lat)
+                lon = longitude_to_ddm(wpt.lon)
+                gpwpl = pynmea2.WPL("GP", "WPL", (lat[0],lat[1], lon[0], lon[1], wpt_name)).render() + '\r\n'
+                gpwpl_list.append(gpwpl)
+                print(gpwpl)
+
+            write_thread = threading.Thread(target=self.ser.write, args=(gpr00 +"".join(gpwpl_list),))
+            # write_thread = threading.Thread(target=self.ser.write, args=("".join(rte_list),))
+            write_thread.start()         
+            
+
+        # In 5 seconds
+        return 5
