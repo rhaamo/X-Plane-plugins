@@ -20,11 +20,13 @@ Requirements are:
 from XPLMProcessing import *  # noqa F403
 from XPLMDataAccess import *  # noqa F403
 from XPLMUtilities import *  # noqa F403
+from XPLMNavigation import *
 
 # import math
 from datetime import date
 import os
 import serial
+import threading
 
 OutputFile = open(
     os.path.join(
@@ -44,7 +46,7 @@ Maybe a $GPRMB Recommended minimum navigation info for current WP
 
 Sending waypoints:
 GPR00 send the list
-then one GPWPL per waypoint
+then one GPWPL per waypoint, in same order as R00
 """
 
 """
@@ -164,13 +166,20 @@ class PythonInterface:
         # are in seconds, negative are the negative of sim frames.  Zero
         # registers but does not schedule a callback for time.
         self.FlightLoopCB = self.FlightLoopCallback
-        XPLMRegisterFlightLoopCallback(self, self.FlightLoopCB, 0.5, 0)
+        XPLMRegisterFlightLoopCallback(self, self.FlightLoopCB, -1, 0)
+
+        # FlightPlan update every 5s
+        self.FlightPlanCB = self.FlightPlanCallback
+        XPLMRegisterFlightLoopCallback(self, self.FlightPlanCB, 5, 0)
+
         return self.Name, self.Sig, self.Desc
 
     def XPluginStop(self):
         # Unregister the callback.
         XPLMUnregisterFlightLoopCallback(self, self.FlightLoopCB, 0)
+        XPLMUnregisterFlightLoopCallback(self, self.FlightPlanCB, 0)
         self.OutputFile.close()
+        self.ser.close()
 
     def XPluginEnable(self):
         return 1
@@ -284,12 +293,53 @@ class PythonInterface:
         gpgga = f"${gpgga}*{cks}\r\n"
 
         # serial write at 4800 baud can take .3 sec, so put in own thread;
-        # write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
-        # write_thread.start()
+        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
+        write_thread.start()
         self.ser.write(gprmc + gpgga)
         if self.DEBUG:
             OutputFile.write(gprmc + gpgga)
             OutputFile.flush()
+        # print("tick flightloop")
+
+    def FlightPlanCallback(self, elapsedMe, elapsedSim, counter, refcon):
+        entriesInFMC = XPLMCountFMSEntries()
+
+        if entriesInFMC > 0:
+            entries = []
+            wpts_list = []
+            for i in range(entriesInFMC):
+                wpt = XPLMGetFMSEntryInfo(i)
+                entries.append(wpt)
+                if wpt.navAidID.startswith("("):
+                    wpts_list.append(wpt.navAidID[1:-1])
+                else:
+                    wpts_list.append(wpt.navAidID)
+
+            for i in range(13 - entriesInFMC):
+                wpts_list.append("")
+            gpr00 = f"GPR00,{','.join(wpts_list)},,"
+            gpr00_cks = cksum(gpr00)
+            gpr00 = f"${gpr00}*{gpr00_cks}\r\n"
+            print(gpr00)
+
+            # Followed by all the GPWPL
+            gpwpl_list = []
+            for wpt in entries:
+                wpt_lat = f"{'%.4f' % wpt.lat},N"
+                wpt_lon = f"{'%.4f' % wpt.lon},W"
+                if wpt.navAidID.startswith("("):
+                    wpt_name = wpt.navAidID[1:-1]
+                else:
+                    wpt_name = wpt.navAidID
+                gpwpl = f"GPWPL,{wpt_lat},{wpt_lon},{wpt_name}"
+                gpwpl_cks = cksum(gpwpl)
+                gpwpl = f"${gpwpl}*{gpwpl_cks}\r\n"
+                gpwpl_list.append(gpwpl)
+                print(gpwpl)
+
+            write_thread = threading.Thread(target=self.ser.write, args=(gpr00 +"".join(gpwpl_list),))
+            write_thread.start()         
+            
 
         # Return s.s to indicate that we want to be called again in s.s seconds.
         return 0.1
