@@ -28,7 +28,7 @@ import os
 import serial
 import threading
 import pynmea2
-from math import floor
+from math import floor, ceil
 
 OutputFile = open(
     os.path.join(
@@ -84,9 +84,9 @@ Supported NMEA-0183 sentences.
     APB: AUTO-PILOT 'B' (VALID,CROSS-TRACK DEVIATION,BEARING,WAYPOINT ID,DISTANCE)
     ---RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
     ***RMC: GPS AND TRANSIT INFO (UTC TIME,VALID,LAT,LON,GROUND SPEED,TRACK,MAGVAR)
-    !!!R00: ROUTE DEFINITION
-    RTE: ROUTE DEFINITION
-    !!!WPL: WAYPOINT LOCATION
+    ***R00: ROUTE DEFINITION --- the argus don't seems to understand/use it correctly
+    ***RTE: ROUTE DEFINITION --- the argus don't seems to understand/use it correctly
+    ***WPL: WAYPOINT LOCATION --- the argus don't seems to understand/use it correctly
     MAP: KING MARINE - AUTO-PILOT 'B'
     MLC: KING MARINE - LAT/LON
     ***GGA: GPS FIX RECORD
@@ -157,6 +157,8 @@ class SocketPlugin(object):
             self.s.write(data.encode())
         except serial.serialutil.SerialTimeoutException:
             print("Serial port timeout")
+        except serial.serialutil.SerialException as e:
+            print(f"Serial port error: {e}")
 
 
 class PythonInterface:
@@ -365,8 +367,26 @@ class PythonInterface:
                 else:
                     wpts_list.append(wpt.navAidID)
 
-            for i in range(13 - entriesInFMC):
-                wpts_list.append("")
+            # GPRTE
+            # doesn't seems that great to use with the ARGUS
+            # the order seems to be reversed, and the current route not taken into account
+            # but this sentence is parsed
+            # rte_list = []
+            # rte_idx = ceil(entriesInFMC / 5)
+            # split_by = 5
+            # for wpts in [wpts_list[i:i + split_by] for i in range(0, len(wpts_list), split_by)] :
+            #     gprte = pynmea2.RTE("GP", "RTE", (str(ceil(entriesInFMC / 5)), str(rte_idx), "c", *wpts)).render()
+            #     rte_list.append(gprte + '\r\n')
+            #     rte_idx -= 1
+            # # For some reasons, the Argus parses them in reverse order received
+            # rte_list.reverse()
+            # print(rte_list)
+
+            # R00 and WPL
+            # They are weirdly understood by the Argus
+            # some coordinates are mangled in the waypoints list
+            # and the waypoint edit shows glitchy coordinates, but that may be because the argus don't known thoses waypoints ID in its DB
+            # GPR00
             gpr00 = pynmea2.R00("GP", "R00", wpts_list).render() + '\r\n'
             print(gpr00)
 
@@ -384,6 +404,7 @@ class PythonInterface:
                 print(gpwpl)
 
             write_thread = threading.Thread(target=self.ser.write, args=(gpr00 +"".join(gpwpl_list),))
+            # write_thread = threading.Thread(target=self.ser.write, args=("".join(rte_list),))
             write_thread.start()         
             
 
