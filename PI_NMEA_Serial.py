@@ -34,43 +34,27 @@ OutputFile = open(
 )
 
 """
-# http://www.cedricaoun.net/eie/trames%20NMEA183.pdf
-# Minimal GPS datas recommended
-$GPRMC,040608.00,A,5130.3335,N,00002.6887,E,008.7,92.4,010821,0.0,W*78
-040608.00 fix acq
-A alert nav = OK
-5130.3335,N lat
-00002.6887,E lon
-008.7 ground speed, knots
-92.4 real bearing
-010821 fix date
-0.0,W magnetic declinaison
+To test:
+$GPBOD - Bearing, origin to destination http://aprs.gids.nl/nmea/#bod
+$GPR00 - List of waypoints in currently active route http://aprs.gids.nl/nmea/#r00
+$GPWPL - Waypoint location http://aprs.gids.nl/nmea/#wpl
+$GPRTE - Routes http://aprs.gids.nl/nmea/#rte
 
-# GPS Fix acquisition datas
-$GPGGA,040608.00,5130.3335,N,00002.6887,E,1,04,0.0,4.3,M,,,,*34
-040608.00 fix acq
-5130.3335,N lat
-00002.6887,E lon
-1 fix gps
-04 sat pursuit
-0.0 DOP
-4.3,M altitude
+Maybe a $GPRMB Recommended minimum navigation info for current WP
 
-# GLL Lat/Lon + fix time
-# GSV Sats in view
-# VTG cap in degrees + cap magnetic + speed in knots and km/h
-
-
-# https://docs.novatel.com/OEM7/Content/Logs/GPGSA.htm
-$GPGSA,A,3,13,20,31,,,,,,,,,,02.2,02.2,*1e
-A automatic fix
-3 3D fix
-13 prns
-20 HDOP
-31 VDOP
+Sending waypoints:
+GPR00 send the list
+then one GPWPL per waypoint
 """
 
 """
+http://www.cedricaoun.net/eie/trames%20NMEA183.pdf
+http://aprs.gids.nl/nmea/
+https://docs.novatel.com/OEM7/Content/Logs/GPGSA.htm
+"""
+
+"""
+http://eventidier.com/argus/compat.htm
 Argus 7000/CE Setup:
 Powers on with ENR + AUX until self-test
 Quickly press AUX 3 times, then ARR
@@ -81,7 +65,22 @@ By default the BAUD RATE is 4800
 Choose 19200 8 NONE 1
 Then AUX to exit
 
-For the Argus, at least GPGGA and GPRMC seems useful, I don't see the point of sending GPGSA
+Supported NMEA-0183 sentences (*** denotes already supported sentences by the plugin):
+    APA: AUTO-PILOT 'A' (VALID, CROSS-TRACK DEVIATION, BEARING)
+    GLL: LATITUDE, LONGITUDE
+    VTG: TRACK, GROUND SPEED
+    BOD: DESIRED TRACK
+    BWC: BEARING, DISTANCE (GT. CIRCLE)
+    HVD: MAGVAR (DERIVED)
+    APB: AUTO-PILOT 'B' (VALID,CROSS-TRACK DEVIATION,BEARING,WAYPOINT ID,DISTANCE)
+    RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
+    ***RMC: GPS AND TRANSIT INFO (UTC TIME,VALID,LAT,LON,GROUND SPEED,TRACK,MAGVAR)
+    R00: ROUTE DEFINITION
+    RTE: ROUTE DEFINITION
+    WPL: WAYPOINT LOCATION
+    MAP: KING MARINE - AUTO-PILOT 'B'
+    MLC: KING MARINE - LAT/LON
+    ***GGA: GPS FIX RECORD
 """
 
 
@@ -117,7 +116,6 @@ class PythonInterface:
         self.Sig = "Dashie.Python.NMEA_Serial"
         self.Desc = "A plugin to send NMEA sentences to mapping hardware over Serial."
 
-        self.SEND_GPGSA = False
         self.DEBUG = False
 
         # For possible debugging use:
@@ -285,19 +283,12 @@ class PythonInterface:
         cks = cksum(gpgga)
         gpgga = f"${gpgga}*{cks}\r\n"
 
-        # pocketfms requires gpgsa sentence;
-        # this one (constant) is what x-plane equipment setting sends.
-        if self.SEND_GPGSA:
-            gpgsa = "$GPGSA,A,3,13,20,31,,,,,,,,,,02.2,02.2,*1e\r\n"
-        else:
-            gpgsa = ""
-
         # serial write at 4800 baud can take .3 sec, so put in own thread;
-        # write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga + gpgsa,))
+        # write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
         # write_thread.start()
-        self.ser.write(gprmc + gpgga + gpgsa)
+        self.ser.write(gprmc + gpgga)
         if self.DEBUG:
-            OutputFile.write(gprmc + gpgga + gpgsa)
+            OutputFile.write(gprmc + gpgga)
             OutputFile.flush()
 
         # Return s.s to indicate that we want to be called again in s.s seconds.
