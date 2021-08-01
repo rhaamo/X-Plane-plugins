@@ -27,6 +27,8 @@ from datetime import date
 import os
 import serial
 import threading
+import pynmea2
+from math import floor
 
 OutputFile = open(
     os.path.join(
@@ -53,6 +55,8 @@ then one GPWPL per waypoint, in same order as R00
 http://www.cedricaoun.net/eie/trames%20NMEA183.pdf
 http://aprs.gids.nl/nmea/
 https://docs.novatel.com/OEM7/Content/Logs/GPGSA.htm
+
+max sentence length, including $ and CRLF is 82 bytes
 """
 
 """
@@ -67,7 +71,10 @@ By default the BAUD RATE is 4800
 Choose 19200 8 NONE 1
 Then AUX to exit
 
-Supported NMEA-0183 sentences (*** denotes already supported sentences by the plugin):
+Supported NMEA-0183 sentences.
+- *** denotes already supported sentences by the plugin
+- !!! denotes WIP/Broken sentences by the plugin
+- --- denotes to be implemented next
     APA: AUTO-PILOT 'A' (VALID, CROSS-TRACK DEVIATION, BEARING)
     GLL: LATITUDE, LONGITUDE
     VTG: TRACK, GROUND SPEED
@@ -75,11 +82,11 @@ Supported NMEA-0183 sentences (*** denotes already supported sentences by the pl
     BWC: BEARING, DISTANCE (GT. CIRCLE)
     HVD: MAGVAR (DERIVED)
     APB: AUTO-PILOT 'B' (VALID,CROSS-TRACK DEVIATION,BEARING,WAYPOINT ID,DISTANCE)
-    RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
+    ---RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
     ***RMC: GPS AND TRANSIT INFO (UTC TIME,VALID,LAT,LON,GROUND SPEED,TRACK,MAGVAR)
-    R00: ROUTE DEFINITION
+    !!!R00: ROUTE DEFINITION
     RTE: ROUTE DEFINITION
-    WPL: WAYPOINT LOCATION
+    !!!WPL: WAYPOINT LOCATION
     MAP: KING MARINE - AUTO-PILOT 'B'
     MLC: KING MARINE - LAT/LON
     ***GGA: GPS FIX RECORD
@@ -98,6 +105,43 @@ def cksum(sentence):
     return cksum
 
 
+### From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
+
+def degrees_to_ddm(dd):
+    degrees = int(floor(dd))
+    minutes = (dd - degrees) * 60
+    return (degrees, minutes)
+
+
+def latitude_to_ddm(dd):
+    direction = "S" if dd < 0 else "N"
+    degrees, minutes = degrees_to_ddm(abs(dd))
+
+    return "{0:02d}{1:05.2f}".format(
+        degrees,
+        minutes,
+        ), direction
+
+def longitude_to_ddm(dd):
+    direction = "W" if dd < 0 else "E"
+    degrees, minutes = degrees_to_ddm(abs(dd))
+
+    return "{0:03d}{1:05.2f}".format(
+        degrees,
+        minutes,
+        ), direction
+
+"""
+Examples
+NMEA: 1929.045
+Lat: -19.484083333333334 S
+NMEA: 02410.506
+Lon: 24.1751 E
+"""
+
+### End from aprslib
+
+
 class SocketPlugin(object):
     SERPORT = "COM12"
     s = None
@@ -109,7 +153,10 @@ class SocketPlugin(object):
         self.s = serial.Serial(self.SERPORT, 19200)
 
     def write(self, data):
-        self.s.write(data.encode())
+        try:
+            self.s.write(data.encode())
+        except serial.serialutil.SerialTimeoutException:
+            print("Serial port timeout")
 
 
 class PythonInterface:
@@ -166,7 +213,7 @@ class PythonInterface:
         # are in seconds, negative are the negative of sim frames.  Zero
         # registers but does not schedule a callback for time.
         self.FlightLoopCB = self.FlightLoopCallback
-        XPLMRegisterFlightLoopCallback(self, self.FlightLoopCB, -1, 0)
+        XPLMRegisterFlightLoopCallback(self, self.FlightLoopCB, 0.4, 0)
 
         # FlightPlan update every 5s
         self.FlightPlanCB = self.FlightPlanCallback
@@ -299,7 +346,10 @@ class PythonInterface:
         if self.DEBUG:
             OutputFile.write(gprmc + gpgga)
             OutputFile.flush()
-        # print("tick flightloop")
+        
+        # TODO: RMB sentence
+
+        return 0.4 # in 0.4s
 
     def FlightPlanCallback(self, elapsedMe, elapsedSim, counter, refcon):
         entriesInFMC = XPLMCountFMSEntries()
@@ -317,23 +367,19 @@ class PythonInterface:
 
             for i in range(13 - entriesInFMC):
                 wpts_list.append("")
-            gpr00 = f"GPR00,{','.join(wpts_list)},,"
-            gpr00_cks = cksum(gpr00)
-            gpr00 = f"${gpr00}*{gpr00_cks}\r\n"
+            gpr00 = pynmea2.R00("GP", "R00", wpts_list).render() + '\r\n'
             print(gpr00)
 
             # Followed by all the GPWPL
             gpwpl_list = []
             for wpt in entries:
-                wpt_lat = f"{'%.4f' % wpt.lat},N"
-                wpt_lon = f"{'%.4f' % wpt.lon},W"
                 if wpt.navAidID.startswith("("):
                     wpt_name = wpt.navAidID[1:-1]
                 else:
                     wpt_name = wpt.navAidID
-                gpwpl = f"GPWPL,{wpt_lat},{wpt_lon},{wpt_name}"
-                gpwpl_cks = cksum(gpwpl)
-                gpwpl = f"${gpwpl}*{gpwpl_cks}\r\n"
+                lat =latitude_to_ddm(wpt.lat)
+                lon = longitude_to_ddm(wpt.lon)
+                gpwpl = pynmea2.WPL("GP", "WPL", (lat[0],lat[1], lon[0], lon[1], wpt_name)).render() + '\r\n'
                 gpwpl_list.append(gpwpl)
                 print(gpwpl)
 
@@ -341,5 +387,5 @@ class PythonInterface:
             write_thread.start()         
             
 
-        # Return s.s to indicate that we want to be called again in s.s seconds.
-        return 0.1
+        # In 5 seconds
+        return 5
