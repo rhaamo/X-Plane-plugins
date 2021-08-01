@@ -92,6 +92,11 @@ Supported NMEA-0183 sentences.
     ***GGA: GPS FIX RECORD
 """
 
+"""
+TODO:
+- use X-Plane time (because you can change it) instead of system one
+"""
+
 
 def cksum(sentence):
     """calculates checksum for NMEA sentences"""
@@ -117,7 +122,7 @@ def latitude_to_ddm(dd):
     direction = "S" if dd < 0 else "N"
     degrees, minutes = degrees_to_ddm(abs(dd))
 
-    return "{0:02d}{1:05.2f}".format(
+    return "{0:02d}{1:05.4f}".format(
         degrees,
         minutes,
         ), direction
@@ -126,7 +131,7 @@ def longitude_to_ddm(dd):
     direction = "W" if dd < 0 else "E"
     degrees, minutes = degrees_to_ddm(abs(dd))
 
-    return "{0:03d}{1:05.2f}".format(
+    return "{0:03d}{1:05.4f}".format(
         degrees,
         minutes,
         ), direction
@@ -219,7 +224,7 @@ class PythonInterface:
 
         # FlightPlan update every 5s
         self.FlightPlanCB = self.FlightPlanCallback
-        XPLMRegisterFlightLoopCallback(self, self.FlightPlanCB, 5, 0)
+        XPLMRegisterFlightLoopCallback(self, self.FlightPlanCB, 10, 0)
 
         return self.Name, self.Sig, self.Desc
 
@@ -228,13 +233,13 @@ class PythonInterface:
         XPLMUnregisterFlightLoopCallback(self, self.FlightLoopCB, 0)
         XPLMUnregisterFlightLoopCallback(self, self.FlightPlanCB, 0)
         self.OutputFile.close()
-        self.ser.close()
+        self.ser.s.close()
 
     def XPluginEnable(self):
         return 1
 
     def XPluginDisable(self):
-        self.ser.close()
+        self.ser.s.close()
 
     def XPluginReceiveMessage(self, inFromWho, inMessage, inParam):
         pass
@@ -264,21 +269,8 @@ class PythonInterface:
         n_time = str(hh).zfill(2) + str(mm).zfill(2) + str(ss).zfill(2) + ".00"
 
         # lat and lon +/- ddd.dddd --> dddmm.mmm,h
-        h = "N"
-        if self.Lat_deg < 0:
-            h = "S"
-        self.Lat_deg = abs(self.Lat_deg)
-        ddd = int(self.Lat_deg)
-        mmm = 60 * (self.Lat_deg - ddd)
-        n_lat = str(ddd).zfill(2) + ("%.4f" % mmm).zfill(7) + "," + h
-
-        h = "E"
-        if self.Lon_deg < 0:
-            h = "W"
-        self.Lon_deg = abs(self.Lon_deg)
-        ddd = int(self.Lon_deg)
-        mmm = 60 * (self.Lon_deg - ddd)
-        n_lon = str(ddd).zfill(3) + ("%.4f" % mmm).zfill(7) + "," + h
+        n_lat = latitude_to_ddm(self.Lat_deg)
+        n_lon = longitude_to_ddm(self.Lon_deg)
 
         # speed and heading may need some padding
         n_speed = ("%.1f" % self.Vgnd_kts).zfill(5)
@@ -299,47 +291,10 @@ class PythonInterface:
         n_alt = "%.1f" % self.Alt_ind
 
         # construct the nmea gprmc sentence
-        gprmc = (
-            "GPRMC"
-            + ","
-            + n_time
-            + ","
-            + "A"
-            + ","
-            + n_lat
-            + ","
-            + n_lon
-            + ","
-            + n_speed
-            + ","
-            + n_heading
-            + ","
-            + self.n_date
-            + ","
-            + n_magvar
-        )
-
-        # append check sum and inital $
-        cks = cksum(gprmc)
-        gprmc = f"${gprmc}*{cks}\r\n"
-
+        gprmc = pynmea2.RMC("GP", "RMC", (n_time, "A", n_lat[0], n_lat[1], n_lon[0], n_lon[1], n_speed, n_heading, self.n_date, n_magvar)).render() + '\r\n'
+        
         # construct the nmea gpgga sentence
-        gpgga = (
-            "GPGGA"
-            + ","
-            + n_time
-            + ","
-            + n_lat
-            + ","
-            + n_lon
-            + ",1,04,0.0,"
-            + n_alt
-            + ",M,,,,"
-        )
-
-        # append check sum and inital $
-        cks = cksum(gpgga)
-        gpgga = f"${gpgga}*{cks}\r\n"
+        gpgga = pynmea2.GGA("GP", "GGA", (n_time, n_lat[0], n_lat[1], n_lon[0], n_lon[1], "1", "04", "0.0", n_alt, "M", "", "", "", "")).render() + '\r\n'
 
         # serial write at 4800 baud can take .3 sec, so put in own thread;
         write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
@@ -409,4 +364,4 @@ class PythonInterface:
             
 
         # In 5 seconds
-        return 5
+        return 10
