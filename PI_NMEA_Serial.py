@@ -83,19 +83,6 @@ TODO:
 - APA & APB ?
 """
 
-
-def cksum(sentence):
-    """calculates checksum for NMEA sentences"""
-    i = 0
-    cksum = 0
-    senlen = len(sentence)
-    while i < senlen:
-        cksum = cksum ^ ord(sentence[i:i + 1])
-        i = i + 1
-    cksum = hex(cksum)[2:]
-    return cksum
-
-
 ### From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
 
 def degrees_to_ddm(dd):
