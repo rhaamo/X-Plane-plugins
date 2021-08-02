@@ -38,20 +38,6 @@ OutputFile = open(
 )
 
 """
-To test:
-$GPBOD - Bearing, origin to destination http://aprs.gids.nl/nmea/#bod
-$GPR00 - List of waypoints in currently active route http://aprs.gids.nl/nmea/#r00
-$GPWPL - Waypoint location http://aprs.gids.nl/nmea/#wpl
-$GPRTE - Routes http://aprs.gids.nl/nmea/#rte
-
-Maybe a $GPRMB Recommended minimum navigation info for current WP
-
-Sending waypoints:
-GPR00 send the list
-then one GPWPL per waypoint, in same order as R00
-"""
-
-"""
 http://www.cedricaoun.net/eie/trames%20NMEA183.pdf
 http://aprs.gids.nl/nmea/
 https://docs.novatel.com/OEM7/Content/Logs/GPGSA.htm
@@ -82,7 +68,7 @@ Supported NMEA-0183 sentences.
     BWC: BEARING, DISTANCE (GT. CIRCLE)
     HVD: MAGVAR (DERIVED)
     APB: AUTO-PILOT 'B' (VALID,CROSS-TRACK DEVIATION,BEARING,WAYPOINT ID,DISTANCE)
-    ---RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
+    ***RMB: GENERIC NAV INFO (VALID,CROSS_TRACK DEV.,WPT ID,DISTANCE,BEARING)
     ***RMC: GPS AND TRANSIT INFO (UTC TIME,VALID,LAT,LON,GROUND SPEED,TRACK,MAGVAR)
     ***R00: ROUTE DEFINITION --- the argus don't seems to understand/use it correctly
     ***RTE: ROUTE DEFINITION --- the argus don't seems to understand/use it correctly
@@ -94,7 +80,7 @@ Supported NMEA-0183 sentences.
 
 """
 TODO:
-- use X-Plane time (because you can change it) instead of system one
+- APA & APB ?
 """
 
 
@@ -149,21 +135,34 @@ Lon: 24.1751 E
 
 class SocketPlugin(object):
     SERPORT = "COM12"
+    SIM = True
     s = None
 
     def __init__(self):
-        self.connect()
+        if not self.SIM:
+            self.connect()
+        else:
+            print("serial: connect()")
 
     def connect(self):
         self.s = serial.Serial(self.SERPORT, 19200)
+    
+    def disconnect(self):
+        if not self.SIM:
+            self.s.close()
+        else:
+            print("serial: disconnect()")
 
     def write(self, data):
-        try:
-            self.s.write(data.encode())
-        except serial.serialutil.SerialTimeoutException:
-            print("Serial port timeout")
-        except serial.serialutil.SerialException as e:
-            print(f"Serial port error: {e}")
+        if not self.SIM:
+            try:
+                self.s.write(data.encode())
+            except serial.serialutil.SerialTimeoutException:
+                print("Serial port timeout")
+            except serial.serialutil.SerialException as e:
+                print(f"Serial port error: {e}")
+        else:
+            print(data)
 
 
 class PythonInterface:
@@ -216,6 +215,14 @@ class PythonInterface:
             "sim/cockpit2/gauges/indicators/total_energy_fpm"
         )
 
+        # Autopilot
+        self.drAutopilotMode = XPLMFindDataRef("sim/cockpit/autopilot/autopilot_mode")  # The autopilot master mode (off=0, flight director=1, on=2)
+
+        self.drGPSdistance = XPLMFindDataRef("sim/cockpit2/radios/indicators/gps_dme_distance_nm")
+        self.drGPSbearing = XPLMFindDataRef("sim/cockpit2/radios/indicators/gps_bearing_deg_mag")
+        self.drGPShdefDot = XPLMFindDataRef("sim/cockpit/radios/gps_hdef_dot")  # sim/cockpit2/radios/indicators/gps_hdef_dots_pilot
+        self.drGPShdefDotNm = XPLMFindDataRef("sim/cockpit/radios/gps_hdef_nm_per_dot")
+
         # Register our callback for twice per 1-second.  Positive intervals
         # are in seconds, negative are the negative of sim frames.  Zero
         # registers but does not schedule a callback for time.
@@ -226,6 +233,10 @@ class PythonInterface:
         self.FlightPlanCB = self.FlightPlanCallback
         XPLMRegisterFlightLoopCallback(self, self.FlightPlanCB, 10, 0)
 
+        # Nav infos update every 0.5s
+        self.FlightNavCB = self.FlightNavCallback
+        XPLMRegisterFlightLoopCallback(self, self.FlightNavCB, 0.5, 0)
+
         return self.Name, self.Sig, self.Desc
 
     def XPluginStop(self):
@@ -233,13 +244,13 @@ class PythonInterface:
         XPLMUnregisterFlightLoopCallback(self, self.FlightLoopCB, 0)
         XPLMUnregisterFlightLoopCallback(self, self.FlightPlanCB, 0)
         self.OutputFile.close()
-        self.ser.s.close()
+        self.ser.disconnect()
 
     def XPluginEnable(self):
         return 1
 
     def XPluginDisable(self):
-        self.ser.s.close()
+        self.ser.disconnect()
 
     def XPluginReceiveMessage(self, inFromWho, inMessage, inParam):
         pass
@@ -303,8 +314,6 @@ class PythonInterface:
         if self.DEBUG:
             OutputFile.write(gprmc + gpgga)
             OutputFile.flush()
-        
-        # TODO: RMB sentence
 
         return 0.4 # in 0.4s
 
@@ -365,3 +374,85 @@ class PythonInterface:
 
         # In 5 seconds
         return 10
+
+
+    def FlightNavCallback(self, elapsedMe, elapsedSim, counter, refcon):
+        """
+        eg2. $GPRMB,A,4.08,L,EGLL,EGLM,5130.02,N,00046.34,W,004.6,213.9,122.9,A*3D
+            1   2  3   4    5    6     7   8      9   10    11    12   13
+
+  
+      1    A         validity
+      2    4.08      off track
+      3    L         Steer Left (L/R)
+      4    EGLL      last waypoint
+      5    EGLM      next waypoint
+      6    5130.02   Latitude of Next waypoint
+      7    N         North/South
+      8    00046.34  Longitude of next waypoint
+      9    W         East/West
+      10   004.6     Range
+      11   213.9     bearing to waypt.
+      12   122.9     closing velocity
+      13   A         validity
+      14   *3D       checksum
+        """
+        currentDestinationID = XPLMGetGPSDestination()
+        currentDestination = XPLMGetNavAidInfo(currentDestinationID)
+        currentDestinationFMSID = XPLMGetDestinationFMSEntry()
+        currentDestinationFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID)
+
+        print(f"Got GPS Dest {currentDestination.navAidID} and FMS dest {currentDestinationFMS.navAidID}")
+
+        if currentDestination.navAidID != currentDestinationFMS.navAidID:
+            return 0.5
+        
+        fmsEntries = XPLMCountFMSEntries()
+        if currentDestinationFMSID >= fmsEntries:
+            # last waypoint, no more after that
+            return 0.5
+        
+        nextWaypointFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID + 1)
+        nextWaypointLat = latitude_to_ddm(nextWaypointFMS.lat)
+        nextWaypointLon = longitude_to_ddm(nextWaypointFMS.lon)
+
+        if currentDestinationFMSID == 0:
+            lastWaypoint = ""
+        else:
+            lastWaypointFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID - 1)
+            lastWaypoint = lastWaypointFMS.navAidID
+        
+        self.Lat_deg = XPLMGetDatad(self.drLat_deg)
+        self.Lon_deg = XPLMGetDatad(self.drLon_deg)
+
+        us_to_wpt = XPLMGetDataf(self.drGPSdistance)
+
+        self.Vgnd_kts = XPLMGetDataf(self.drVgnd_kts) * 1.943  # m/sec -> kts
+
+        bearingToWpt = XPLMGetDataf(self.drGPSbearing)
+
+        gpsDot = XPLMGetDataf(self.drGPShdefDot)
+        gpsDotNm = XPLMGetDataf(self.drGPShdefDotNm)
+        deviation = abs(gpsDot * gpsDotNm)
+
+        gprmb = pynmea2.RMB("GP", "RMB", (
+            "A",
+            str("%.2f" % deviation) if deviation < 9.99 else "9.99",
+            "L" if gpsDot < 0.0 else "R" , # Steer to L or R
+            str(lastWaypoint),
+            str(nextWaypointFMS.navAidID),
+            str(nextWaypointLat[0]),
+            str(nextWaypointLat[1]),
+            str(nextWaypointLon[0]),
+            str(nextWaypointLon[1]),
+            str(999.9 if us_to_wpt >= 999.9 else ("%.1f" % us_to_wpt)),
+            str(("%.1f" % bearingToWpt)),
+            str(("%.1f" % self.Vgnd_kts).zfill(5)),
+            "A" if us_to_wpt < 1 else "V"  # Arrived if <1nm, or V if not arrived
+        )).render() + '\r\n'
+
+        write_thread = threading.Thread(target=self.ser.write, args=(gprmb,))
+        write_thread.start()       
+
+
+        return 0.5
