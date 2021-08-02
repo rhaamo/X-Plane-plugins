@@ -377,26 +377,6 @@ class PythonInterface:
 
 
     def FlightNavCallback(self, elapsedMe, elapsedSim, counter, refcon):
-        """
-        eg2. $GPRMB,A,4.08,L,EGLL,EGLM,5130.02,N,00046.34,W,004.6,213.9,122.9,A*3D
-            1   2  3   4    5    6     7   8      9   10    11    12   13
-
-  
-      1    A         validity
-      2    4.08      off track
-      3    L         Steer Left (L/R)
-      4    EGLL      last waypoint
-      5    EGLM      next waypoint
-      6    5130.02   Latitude of Next waypoint
-      7    N         North/South
-      8    00046.34  Longitude of next waypoint
-      9    W         East/West
-      10   004.6     Range
-      11   213.9     bearing to waypt.
-      12   122.9     closing velocity
-      13   A         validity
-      14   *3D       checksum
-        """
         currentDestinationID = XPLMGetGPSDestination()
         currentDestination = XPLMGetNavAidInfo(currentDestinationID)
         currentDestinationFMSID = XPLMGetDestinationFMSEntry()
