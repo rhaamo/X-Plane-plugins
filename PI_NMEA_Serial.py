@@ -29,7 +29,7 @@ import os
 import serial
 import threading
 import pynmea2
-from math import floor, ceil
+from math import floor
 
 OutputFile = open(
     os.path.join(
@@ -83,7 +83,8 @@ Supported NMEA-0183 sentences.
 - APA and APB might not be that useful, and it looks to be one or the other
 """
 
-### From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
+# From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
+
 
 def degrees_to_ddm(dd):
     degrees = int(floor(dd))
@@ -95,19 +96,27 @@ def latitude_to_ddm(dd):
     direction = "S" if dd < 0 else "N"
     degrees, minutes = degrees_to_ddm(abs(dd))
 
-    return "{0:02d}{1:05.4f}".format(
-        degrees,
-        minutes,
-        ), direction
+    return (
+        "{0:02d}{1:05.4f}".format(
+            degrees,
+            minutes,
+        ),
+        direction,
+    )
+
 
 def longitude_to_ddm(dd):
     direction = "W" if dd < 0 else "E"
     degrees, minutes = degrees_to_ddm(abs(dd))
 
-    return "{0:03d}{1:05.4f}".format(
-        degrees,
-        minutes,
-        ), direction
+    return (
+        "{0:03d}{1:05.4f}".format(
+            degrees,
+            minutes,
+        ),
+        direction,
+    )
+
 
 """
 Examples
@@ -117,7 +126,7 @@ NMEA: 02410.506
 Lon: 24.1751 E
 """
 
-### End from aprslib
+# End from aprslib
 
 
 class SocketPlugin(object):
@@ -133,7 +142,7 @@ class SocketPlugin(object):
 
     def connect(self):
         self.s = serial.Serial(self.SERPORT, 19200)
-    
+
     def disconnect(self):
         if not self.SIM:
             self.s.close()
@@ -177,7 +186,9 @@ class PythonInterface:
         self.drVgnd_kts = XPLMFindDataRef("sim/flightmodel/position/groundspeed")
 
         # magnetic heading and variation
-        self.drHding_mag = XPLMFindDataRef("sim/flightmodel/position/mag_psi")  # not magpsi
+        self.drHding_mag = XPLMFindDataRef(
+            "sim/flightmodel/position/mag_psi"
+        )  # not magpsi
         self.drHding_true = XPLMFindDataRef("sim/flightmodel/position/true_psi")
         self.drMag_var = XPLMFindDataRef("sim/flightmodel/position/magnetic_variation")
 
@@ -204,11 +215,19 @@ class PythonInterface:
         )
 
         # Autopilot
-        self.drAutopilotMode = XPLMFindDataRef("sim/cockpit/autopilot/autopilot_mode")  # The autopilot master mode (off=0, flight director=1, on=2)
+        self.drAutopilotMode = XPLMFindDataRef(
+            "sim/cockpit/autopilot/autopilot_mode"
+        )  # The autopilot master mode (off=0, flight director=1, on=2)
 
-        self.drGPSdistance = XPLMFindDataRef("sim/cockpit2/radios/indicators/gps_dme_distance_nm")
-        self.drGPSbearing = XPLMFindDataRef("sim/cockpit2/radios/indicators/gps_bearing_deg_mag")
-        self.drGPShdefDot = XPLMFindDataRef("sim/cockpit/radios/gps_hdef_dot")  # sim/cockpit2/radios/indicators/gps_hdef_dots_pilot
+        self.drGPSdistance = XPLMFindDataRef(
+            "sim/cockpit2/radios/indicators/gps_dme_distance_nm"
+        )
+        self.drGPSbearing = XPLMFindDataRef(
+            "sim/cockpit2/radios/indicators/gps_bearing_deg_mag"
+        )
+        self.drGPShdefDot = XPLMFindDataRef(
+            "sim/cockpit/radios/gps_hdef_dot"
+        )  # sim/cockpit2/radios/indicators/gps_hdef_dots_pilot
         self.drGPShdefDotNm = XPLMFindDataRef("sim/cockpit/radios/gps_hdef_nm_per_dot")
 
         # Register our callback for twice per 1-second.  Positive intervals
@@ -292,36 +311,87 @@ class PythonInterface:
         n_alt = "%.1f" % self.Alt_ind
 
         # construct the nmea gprmc sentence
-        gprmc = pynmea2.RMC("GP", "RMC", (n_time, "A", n_lat[0], n_lat[1], n_lon[0], n_lon[1], n_speed, n_heading, self.n_date, n_magvar)).render() + '\r\n'
-        
+        gprmc = (
+            pynmea2.RMC(
+                "GP",
+                "RMC",
+                (
+                    n_time,
+                    "A",
+                    n_lat[0],
+                    n_lat[1],
+                    n_lon[0],
+                    n_lon[1],
+                    n_speed,
+                    n_heading,
+                    self.n_date,
+                    n_magvar,
+                ),
+            ).render()
+            + "\r\n"
+        )
+
         # construct the nmea gpgga sentence
-        gpgga = pynmea2.GGA("GP", "GGA", (n_time, n_lat[0], n_lat[1], n_lon[0], n_lon[1], "1", "04", "0.0", n_alt, "M", "", "", "", "")).render() + '\r\n'
+        gpgga = (
+            pynmea2.GGA(
+                "GP",
+                "GGA",
+                (
+                    n_time,
+                    n_lat[0],
+                    n_lat[1],
+                    n_lon[0],
+                    n_lon[1],
+                    "1",
+                    "04",
+                    "0.0",
+                    n_alt,
+                    "M",
+                    "",
+                    "",
+                    "",
+                    "",
+                ),
+            ).render()
+            + "\r\n"
+        )
 
-        gpgll = pynmea2.GLL("GP", "GLL", (
-            n_lat[0],
-            n_lat[1],
-            n_lon[0],
-            n_lon[1],
-            n_time,
-            "A"
-        )).render() + '\r\n'
+        gpgll = (
+            pynmea2.GLL(
+                "GP", "GLL", (n_lat[0], n_lat[1], n_lon[0], n_lon[1], n_time, "A")
+            ).render()
+            + "\r\n"
+        )
 
-        gpvtg = pynmea2.VTG("GP", "VTG", (
-            "%.1f" % self.Hding_true, "T",
-            n_heading, "M",
-            n_speed, "N",
-            n_speed_kmh, "K"
-        )).render() + '\r\n'
+        gpvtg = (
+            pynmea2.VTG(
+                "GP",
+                "VTG",
+                (
+                    "%.1f" % self.Hding_true,
+                    "T",
+                    n_heading,
+                    "M",
+                    n_speed,
+                    "N",
+                    n_speed_kmh,
+                    "K",
+                ),
+            ).render()
+            + "\r\n"
+        )
 
         # serial write at 4800 baud can take .3 sec, so put in own thread;
-        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga + gpgll + gpvtg,))
+        write_thread = threading.Thread(
+            target=self.ser.write, args=(gprmc + gpgga + gpgll + gpvtg,)
+        )
         write_thread.start()
         self.ser.write(gprmc + gpgga)
         if self.DEBUG:
             OutputFile.write(gprmc + gpgga)
             OutputFile.flush()
 
-        return 0.4 # in 0.4s
+        return 0.4  # in 0.4s
 
     def FlightPlanCallback(self, elapsedMe, elapsedSim, counter, refcon):
         return 10
@@ -360,7 +430,7 @@ class PythonInterface:
             # some coordinates are mangled in the waypoints list
             # and the waypoint edit shows glitchy coordinates, but that may be because the argus don't known thoses waypoints ID in its DB
             # GPR00
-            gpr00 = pynmea2.R00("GP", "R00", wpts_list).render() + '\r\n'
+            gpr00 = pynmea2.R00("GP", "R00", wpts_list).render() + "\r\n"
             print(gpr00)
 
             # Followed by all the GPWPL
@@ -372,20 +442,25 @@ class PythonInterface:
                     wpt_name = wpt.navAidID[1:-1]
                 else:
                     wpt_name = wpt.navAidID
-                lat =latitude_to_ddm(wpt.lat)
+                lat = latitude_to_ddm(wpt.lat)
                 lon = longitude_to_ddm(wpt.lon)
-                gpwpl = pynmea2.WPL("GP", "WPL", (lat[0],lat[1], lon[0], lon[1], wpt_name)).render() + '\r\n'
+                gpwpl = (
+                    pynmea2.WPL(
+                        "GP", "WPL", (lat[0], lat[1], lon[0], lon[1], wpt_name)
+                    ).render()
+                    + "\r\n"
+                )
                 gpwpl_list.append(gpwpl)
                 print(gpwpl)
 
-            write_thread = threading.Thread(target=self.ser.write, args=(gpr00 +"".join(gpwpl_list),))
+            write_thread = threading.Thread(
+                target=self.ser.write, args=(gpr00 + "".join(gpwpl_list),)
+            )
             # write_thread = threading.Thread(target=self.ser.write, args=("".join(rte_list),))
-            write_thread.start()         
-            
+            write_thread.start()
 
         # In 5 seconds
         return 10
-
 
     def FlightNavCallback(self, elapsedMe, elapsedSim, counter, refcon):
         currentDestinationID = XPLMGetGPSDestination()
@@ -399,9 +474,11 @@ class PythonInterface:
         currentDestinationFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID)
 
         if currentDestination.navAidID != currentDestinationFMS.navAidID:
-            print(f"current destination {currentDestination.navAidID} does not match FMS one {currentDestinationFMS.navAidID}")
+            print(
+                f"current destination {currentDestination.navAidID} does not match FMS one {currentDestinationFMS.navAidID}"
+            )
             return 0.5
-        
+
         nextWaypointFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID + 1)
         if nextWaypointFMS == XPLM_NAV_NOT_FOUND:
             nextWaypoint = ""
@@ -434,23 +511,32 @@ class PythonInterface:
         gpsDotNm = XPLMGetDataf(self.drGPShdefDotNm)
         deviation = abs(gpsDot * gpsDotNm)
 
-        gprmb = pynmea2.RMB("GP", "RMB", (
-            "A",
-            str("%.2f" % deviation) if deviation < 9.99 else "9.99",
-            "L" if gpsDot < 0.0 else "R" , # Steer to L or R
-            str(lastWaypoint),
-            str(nextWaypoint),
-            str(nextWaypointLat[0]),
-            str(nextWaypointLat[1]),
-            str(nextWaypointLon[0]),
-            str(nextWaypointLon[1]),
-            str(999.9 if us_to_wpt >= 999.9 else ("%.1f" % us_to_wpt)),
-            str(("%.1f" % bearingToWpt)),
-            str(("%.1f" % self.Vgnd_kts).zfill(5)),
-            "A" if us_to_wpt < 1 else "V"  # Arrived if <1nm, or V if not arrived
-        )).render() + '\r\n'
+        gprmb = (
+            pynmea2.RMB(
+                "GP",
+                "RMB",
+                (
+                    "A",
+                    str("%.2f" % deviation) if deviation < 9.99 else "9.99",
+                    "L" if gpsDot < 0.0 else "R",  # Steer to L or R
+                    str(lastWaypoint),
+                    str(nextWaypoint),
+                    str(nextWaypointLat[0]),
+                    str(nextWaypointLat[1]),
+                    str(nextWaypointLon[0]),
+                    str(nextWaypointLon[1]),
+                    str(999.9 if us_to_wpt >= 999.9 else ("%.1f" % us_to_wpt)),
+                    str(("%.1f" % bearingToWpt)),
+                    str(("%.1f" % self.Vgnd_kts).zfill(5)),
+                    "A"
+                    if us_to_wpt < 1
+                    else "V",  # Arrived if <1nm, or V if not arrived
+                ),
+            ).render()
+            + "\r\n"
+        )
 
         write_thread = threading.Thread(target=self.ser.write, args=(gprmb,))
-        write_thread.start()       
+        write_thread.start()
 
         return 0.5
