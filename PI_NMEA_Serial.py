@@ -64,7 +64,7 @@ Supported NMEA-0183 sentences.
 - --- denotes to be implemented next
     APA: AUTO-PILOT 'A' (VALID, CROSS-TRACK DEVIATION, BEARING)
     ***GLL: LATITUDE, LONGITUDE
-    VTG: TRACK, GROUND SPEED
+    ***VTG: TRACK, GROUND SPEED
     BOD: DESIRED TRACK
     BWC: BEARING, DISTANCE (GT. CIRCLE)
     HVD: MAGVAR (DERIVED)
@@ -77,12 +77,10 @@ Supported NMEA-0183 sentences.
     MAP: KING MARINE - AUTO-PILOT 'B'
     MLC: KING MARINE - LAT/LON
     ***GGA: GPS FIX RECORD
-"""
 
-"""
-TODO:
-- APA & APB ?
-- BOD should go in FlightNavCallback with if the flight plan has at least one more waypoint and we are on an active leg
+- MAP and MLC are King Marine specific and won't be implemented.
+- BOD should go in FlightNavCallback with if the flight plan has at least one more waypoint and we are on an active leg, but maybe RMB is sufficient
+- APA and APB might not be that useful, and it looks to be one or the other
 """
 
 ### From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
@@ -179,7 +177,8 @@ class PythonInterface:
         self.drVgnd_kts = XPLMFindDataRef("sim/flightmodel/position/groundspeed")
 
         # magnetic heading and variation
-        self.drHding_mag = XPLMFindDataRef("sim/flightmodel/position/magpsi")
+        self.drHding_mag = XPLMFindDataRef("sim/flightmodel/position/mag_psi")  # not magpsi
+        self.drHding_true = XPLMFindDataRef("sim/flightmodel/position/true_psi")
         self.drMag_var = XPLMFindDataRef("sim/flightmodel/position/magnetic_variation")
 
         # latitude, longitude, and altitude
@@ -251,6 +250,7 @@ class PythonInterface:
         self.Lon_deg = XPLMGetDatad(self.drLon_deg)
         self.Vgnd_kts = XPLMGetDataf(self.drVgnd_kts) * 1.943  # m/sec -> kts
         self.Hding_mag = XPLMGetDataf(self.drHding_mag)
+        self.Hding_true = XPLMGetDataf(self.drHding_true)
         self.Mag_var = XPLMGetDataf(self.drMag_var)
         self.Alt_ind = XPLMGetDatad(self.drAlt_ind)
 
@@ -274,6 +274,7 @@ class PythonInterface:
 
         # speed and heading may need some padding
         n_speed = ("%.1f" % self.Vgnd_kts).zfill(5)
+        n_speed_kmh = ("%.1f" % (self.Vgnd_kts * 1.852)).zfill(5)
         # heading mag --> true
         n_heading = "%.1f" % (self.Hding_mag - self.Mag_var)
 
@@ -305,8 +306,15 @@ class PythonInterface:
             "A"
         )).render() + '\r\n'
 
+        gpvtg = pynmea2.VTG("GP", "VTG", (
+            "%.1f" % self.Hding_true, "T",
+            n_heading, "M",
+            n_speed, "N",
+            n_speed_kmh, "K"
+        )).render() + '\r\n'
+
         # serial write at 4800 baud can take .3 sec, so put in own thread;
-        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga + gpgll,))
+        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga + gpgll + gpvtg,))
         write_thread.start()
         self.ser.write(gprmc + gpgga)
         if self.DEBUG:
