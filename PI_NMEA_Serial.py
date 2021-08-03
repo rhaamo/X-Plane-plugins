@@ -17,6 +17,7 @@ Requirements are:
 - pyserial (install through pip)
 """
 
+from XPLMDefs import *
 from XPLMProcessing import *  # noqa F403
 from XPLMDataAccess import *  # noqa F403
 from XPLMUtilities import *  # noqa F403
@@ -62,7 +63,7 @@ Supported NMEA-0183 sentences.
 - !!! denotes WIP/Broken sentences by the plugin
 - --- denotes to be implemented next
     APA: AUTO-PILOT 'A' (VALID, CROSS-TRACK DEVIATION, BEARING)
-    GLL: LATITUDE, LONGITUDE
+    ***GLL: LATITUDE, LONGITUDE
     VTG: TRACK, GROUND SPEED
     BOD: DESIRED TRACK
     BWC: BEARING, DISTANCE (GT. CIRCLE)
@@ -80,7 +81,9 @@ Supported NMEA-0183 sentences.
 
 """
 TODO:
+- Add XPLM_NAV_NOT_FOUND and 0 checks in FlightPlanCallback
 - APA & APB ?
+- BOD should go in FlightNavCallback with if the flight plan has at least one more waypoint and we are on an active leg
 """
 
 ### From https://github.com/rossengeorgiev/aprs-python/blob/master/aprslib/util/__init__.py
@@ -294,8 +297,17 @@ class PythonInterface:
         # construct the nmea gpgga sentence
         gpgga = pynmea2.GGA("GP", "GGA", (n_time, n_lat[0], n_lat[1], n_lon[0], n_lon[1], "1", "04", "0.0", n_alt, "M", "", "", "", "")).render() + '\r\n'
 
+        gpgll = pynmea2.GLL("GP", "GLL", (
+            n_lat[0],
+            n_lat[1],
+            n_lon[0],
+            n_lon[1],
+            n_time,
+            "A"
+        )).render() + '\r\n'
+
         # serial write at 4800 baud can take .3 sec, so put in own thread;
-        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga,))
+        write_thread = threading.Thread(target=self.ser.write, args=(gprmc + gpgga + gpgll,))
         write_thread.start()
         self.ser.write(gprmc + gpgga)
         if self.DEBUG:
@@ -305,6 +317,7 @@ class PythonInterface:
         return 0.4 # in 0.4s
 
     def FlightPlanCallback(self, elapsedMe, elapsedSim, counter, refcon):
+        return 10
         entriesInFMC = XPLMCountFMSEntries()
 
         if entriesInFMC > 0:
@@ -365,30 +378,38 @@ class PythonInterface:
 
     def FlightNavCallback(self, elapsedMe, elapsedSim, counter, refcon):
         currentDestinationID = XPLMGetGPSDestination()
+        if currentDestinationID == XPLM_NAV_NOT_FOUND:
+            return 0.5
         currentDestination = XPLMGetNavAidInfo(currentDestinationID)
+
         currentDestinationFMSID = XPLMGetDestinationFMSEntry()
+        if currentDestinationFMSID == XPLM_NAV_NOT_FOUND:
+            return 0.5
         currentDestinationFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID)
 
-        print(f"Got GPS Dest {currentDestination.navAidID} and FMS dest {currentDestinationFMS.navAidID}")
-
         if currentDestination.navAidID != currentDestinationFMS.navAidID:
-            return 0.5
-        
-        fmsEntries = XPLMCountFMSEntries()
-        if currentDestinationFMSID >= fmsEntries:
-            # last waypoint, no more after that
+            print(f"current destination {currentDestination.navAidID} does not match FMS one {currentDestinationFMS.navAidID}")
             return 0.5
         
         nextWaypointFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID + 1)
-        nextWaypointLat = latitude_to_ddm(nextWaypointFMS.lat)
-        nextWaypointLon = longitude_to_ddm(nextWaypointFMS.lon)
+        if nextWaypointFMS == XPLM_NAV_NOT_FOUND:
+            nextWaypoint = ""
+            nextWaypointLat = ("", "")
+            nextWaypointLon = ("", "")
+        else:
+            nextWaypoint = nextWaypointFMS.navAidID
+            nextWaypointLat = latitude_to_ddm(nextWaypointFMS.lat)
+            nextWaypointLon = longitude_to_ddm(nextWaypointFMS.lon)
 
         if currentDestinationFMSID == 0:
             lastWaypoint = ""
         else:
             lastWaypointFMS = XPLMGetFMSEntryInfo(currentDestinationFMSID - 1)
-            lastWaypoint = lastWaypointFMS.navAidID
-        
+            if lastWaypointFMS == XPLM_NAV_NOT_FOUND:
+                lastWaypoint = ""
+            else:
+                lastWaypoint = lastWaypointFMS.navAidID
+
         self.Lat_deg = XPLMGetDatad(self.drLat_deg)
         self.Lon_deg = XPLMGetDatad(self.drLon_deg)
 
@@ -407,7 +428,7 @@ class PythonInterface:
             str("%.2f" % deviation) if deviation < 9.99 else "9.99",
             "L" if gpsDot < 0.0 else "R" , # Steer to L or R
             str(lastWaypoint),
-            str(nextWaypointFMS.navAidID),
+            str(nextWaypoint),
             str(nextWaypointLat[0]),
             str(nextWaypointLat[1]),
             str(nextWaypointLon[0]),
@@ -420,6 +441,5 @@ class PythonInterface:
 
         write_thread = threading.Thread(target=self.ser.write, args=(gprmb,))
         write_thread.start()       
-
 
         return 0.5
