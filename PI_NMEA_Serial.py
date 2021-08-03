@@ -81,7 +81,6 @@ Supported NMEA-0183 sentences.
 
 """
 TODO:
-- Add XPLM_NAV_NOT_FOUND and 0 checks in FlightPlanCallback
 - APA & APB ?
 - BOD should go in FlightNavCallback with if the flight plan has at least one more waypoint and we are on an active leg
 """
@@ -326,7 +325,9 @@ class PythonInterface:
             for i in range(entriesInFMC):
                 wpt = XPLMGetFMSEntryInfo(i)
                 entries.append(wpt)
-                if wpt.navAidID.startswith("("):
+                if not wpt.navAidID:
+                    wpts_list.append("")
+                elif wpt.navAidID.startswith("("):
                     wpts_list.append(wpt.navAidID[1:-1])
                 else:
                     wpts_list.append(wpt.navAidID)
@@ -357,7 +358,9 @@ class PythonInterface:
             # Followed by all the GPWPL
             gpwpl_list = []
             for wpt in entries:
-                if wpt.navAidID.startswith("("):
+                if not wpt.navAidID:
+                    wpt_name = ""
+                elif wpt.navAidID.startswith("("):
                     wpt_name = wpt.navAidID[1:-1]
                 else:
                     wpt_name = wpt.navAidID
